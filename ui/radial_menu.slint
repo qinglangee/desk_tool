@@ -1,0 +1,65 @@
+// 菜单项数据（Rust 侧通过 model 传入）
+export struct MenuItem {
+    label: string,
+}
+
+// 环形（扇形）菜单窗口：以窗口中心为圆心，菜单项均匀分布在圆周上。
+//
+// 由 Rust 侧控制窗口位置（对准悬浮球中心）和 expand 属性（0 收起 / 1 展开）。
+// 点击空白区域触发 dismiss，点击菜单项触发 item-clicked(index)。
+export component RadialMenu inherits Window {
+    in property <[MenuItem]> items: [];
+    in property <length> radius: 120px;       // 菜单项分布半径
+    in property <length> item-size: 64px;
+    in-out property <float> expand: 0;        // 0 = 收起, 1 = 完全展开
+    callback item-clicked(index: int);
+    callback dismiss();
+
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    width: (root.radius + root.item-size) * 2;
+    height: (root.radius + root.item-size) * 2;
+
+    animate expand { duration: 220ms; easing: ease-out-back; }
+
+    // 空白区域点击 -> 关闭菜单（铺底，位于菜单项下层）
+    TouchArea {
+        clicked => { root.dismiss(); }
+    }
+
+    for item[index] in root.items: Rectangle {
+        property <float> count: max(1, root.items.length);
+        // 第一个菜单项在正上方，其余按顺时针均匀分布
+        property <angle> angle: (-90.0 + 360.0 * index / count) * 1deg;
+
+        width: root.item-size;
+        height: root.item-size;
+        x: root.width / 2 + root.radius * root.expand * cos(self.angle) - self.width / 2;
+        y: root.height / 2 + root.radius * root.expand * sin(self.angle) - self.height / 2;
+        opacity: min(1.0, root.expand);
+        border-radius: self.width / 2;
+        background: touch.has-hover ? #3d4453 : #262b36;
+        border-width: 1px;
+        border-color: #ffffff2a;
+        drop-shadow-color: #00000055;
+        drop-shadow-blur: 8px;
+        drop-shadow-offset-y: 2px;
+
+        Text {
+            text: item.label;
+            color: #e8eaf0;
+            font-size: 13px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            width: parent.width - 8px;
+        }
+
+        touch := TouchArea {
+            // 展开动画结束后再响应点击，收起期间不可点
+            enabled: root.expand > 0.99;
+            clicked => { root.item-clicked(index); }
+        }
+    }
+}

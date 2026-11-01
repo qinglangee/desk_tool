@@ -1,0 +1,111 @@
+// 通用悬浮球控件：无边框、透明、置顶的圆形小窗口。
+//
+// 对外接口：
+//   属性：text / ball-size / ball-brush 控制外观
+//   事件：clicked(确认后的单击)、double-clicked(双击)、right-clicked(右键)、
+//         drag-started(按下)、drag-moved(拖动，带相对按下点的位移增量)
+//
+// 单击与双击通过内部定时器区分：第一次点击后 300ms 内没有第二次点击才算单击。
+export component FloatingBall inherits Window {
+    // ---- 可配置属性 ----
+    in property <string> text: "⚙";
+    in property <length> ball-size: 56px;
+    in property <brush> ball-brush: @linear-gradient(135deg, #4a8fe7, #2b5cb8);
+
+    // ---- 对外事件 ----
+    callback clicked();
+    callback double-clicked();
+    callback right-clicked();
+    callback drag-started();
+    // 拖动增量（相对按下点，逻辑像素）
+    callback drag-moved(delta-x: length, delta-y: length);
+
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    width: root.ball-size + 8px;
+    height: root.ball-size + 8px;
+
+    // ---- 内部状态 ----
+    property <bool> pressed: false;
+    property <bool> dragged: false;
+    property <length> press-x: 0px;
+    property <length> press-y: 0px;
+
+    // 单击/双击区分定时器
+    click-timer := Timer {
+        interval: 300ms;
+        triggered => {
+            self.running = false;
+            root.clicked();
+        }
+    }
+
+    // ---- 球体外观 ----
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.ball-size;
+        height: root.ball-size;
+        border-radius: self.width / 2;
+        background: root.ball-brush;
+        border-width: 1.5px;
+        border-color: #ffffff55;
+        drop-shadow-color: #00000066;
+        drop-shadow-blur: 10px;
+        drop-shadow-offset-y: 2px;
+
+        Text {
+            text: root.text;
+            color: white;
+            font-size: root.ball-size * 0.42;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    // ---- 交互 ----
+    TouchArea {
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                if (event.button == PointerEventButton.right) {
+                    root.right-clicked();
+                } else if (event.button == PointerEventButton.left) {
+                    root.pressed = true;
+                    root.dragged = false;
+                    root.press-x = self.mouse-x;
+                    root.press-y = self.mouse-y;
+                    root.drag-started();
+                }
+            } else if (event.kind == PointerEventKind.up) {
+                root.pressed = false;
+            }
+        }
+        moved => {
+            if (root.pressed) {
+                if (!root.dragged
+                    && (abs(self.mouse-x - root.press-x) > 3px
+                        || abs(self.mouse-y - root.press-y) > 3px)) {
+                    root.dragged = true;
+                }
+                if (root.dragged) {
+                    root.drag-moved(self.mouse-x - root.press-x,
+                                    self.mouse-y - root.press-y);
+                }
+            }
+        }
+        clicked => {
+            if (root.dragged) {
+                return;
+            }
+            if (click-timer.running) {
+                // 定时器未触发又来了第二次点击 => 双击
+                click-timer.running = false;
+                root.double-clicked();
+            } else {
+                // 延迟确认单击
+                click-timer.running = true;
+            }
+        }
+    }
+}

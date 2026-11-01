@@ -1,0 +1,48 @@
+// 数字弹窗：展示被触发菜单项的编号，点击窗口任意处关闭。
+export component NumberPopup inherits Window {
+    in property <int> number: 0;
+    callback close-requested();
+
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+    width: 220px;
+    height: 150px;
+
+    Rectangle {
+        x: 6px;
+        y: 6px;
+        width: parent.width - 12px;
+        height: parent.height - 12px;
+        background: #1f2430;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: #ffffff2a;
+        drop-shadow-color: #00000088;
+        drop-shadow-blur: 18px;
+        drop-shadow-offset-y: 4px;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 10px;
+            Text {
+                text: "菜单 " + root.number;
+                color: white;
+                font-size: 34px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "点击窗口任意处关闭";
+                color: #7c8291;
+                font-size: 12px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    // 覆盖整个窗口，点击任意处关闭
+    TouchArea {
+        clicked => { root.close-requested(); }
+    }
+}
