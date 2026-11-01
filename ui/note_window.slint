@@ -55,9 +55,10 @@ export component NoteWindow inherits Window {
                     border-radius: 13px;
                     background: close-touch.has-hover ? #e81123 : #ffffff18;
                     Text {
-                        text: "✕";
+                        // 用 U+00D7（乘号），"✕"(U+2715) 在默认字体里没有字形，会显示成方框
+                        text: "×";
                         color: white;
-                        font-size: 13px;
+                        font-size: 16px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }

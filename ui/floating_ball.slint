@@ -37,6 +37,9 @@ export component FloatingBall inherits Window {
     // 单击/双击区分定时器
     click-timer := Timer {
         interval: 300ms;
+        // 注意：Timer 的 running 默认是 true，必须显式关闭，
+        // 否则程序一启动就会触发一次 clicked
+        running: false;
         triggered => {
             self.running = false;
             root.clicked();

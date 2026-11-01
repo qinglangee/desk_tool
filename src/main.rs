@@ -112,8 +112,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let menu_w = menu.as_weak();
         ball.on_drag_moved(move |dx, dy| {
             if let Some(b) = ball_w.upgrade() {
-                let (ox, oy) = drag_origin.get();
-                b.window().set_position(LogicalPosition::new(ox + dx, oy + dy));
+                // 增量式移动：dx/dy 是相对“当前”窗口位置测出的偏差，
+                // 必须累加到当前位置。如果用“按下点原点 + 位移”，
+                // 位移参考系随窗口移动而变化，会产生反馈振荡（越拖越偏、闪烁）
+                let (cx, cy) = drag_origin.get();
+                let np = (cx + dx, cy + dy);
+                drag_origin.set(np);
+                b.window().set_position(LogicalPosition::new(np.0, np.1));
             }
             // 拖动时顺便收起菜单
             if let Some(m) = menu_w.upgrade() {
