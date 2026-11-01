@@ -1,4 +1,6 @@
-use std::cell::Cell;
+mod config;
+
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -6,15 +8,29 @@ use slint::{LogicalPosition, Timer, VecModel};
 
 slint::include_modules!();
 
-/// 模拟菜单数量（以后加功能在这里扩展，并同步修改菜单点击的处理逻辑）
+/// 模拟菜单数量（以后加功能在这里扩展，并在 trigger 中分发）
 const MENU_COUNT: i32 = 6;
 /// 默认菜单编号：悬浮球单击时直接触发的功能（1 ~ MENU_COUNT）
 const DEFAULT_MENU: i32 = 1;
+
+// 与 note_window.slint 中的窗口尺寸保持一致
+const NOTE_W: f32 = 460.0;
+const NOTE_H: f32 = 400.0;
+// 与 number_popup.slint 中的窗口尺寸保持一致
+const POPUP_W: f32 = 220.0;
+const POPUP_H: f32 = 150.0;
+
+type SharedConfig = Rc<RefCell<config::Config>>;
 
 fn main() -> Result<(), slint::PlatformError> {
     let ball = FloatingBall::new()?;
     let menu = RadialMenu::new()?;
     let popup = NumberPopup::new()?;
+    let note = NoteWindow::new()?;
+
+    // ---------- 配置文件 ----------
+    let cfg: SharedConfig = Rc::new(RefCell::new(config::load()));
+    note.set_save_dir(cfg.borrow().save_dir.clone().unwrap_or_default().into());
 
     // ---------- 菜单数据 ----------
     let items: Vec<MenuItem> = (1..=MENU_COUNT)
@@ -24,22 +40,35 @@ fn main() -> Result<(), slint::PlatformError> {
         .collect();
     menu.set_items(Rc::new(VecModel::from(items)).into());
 
-    // ---------- 悬浮球事件 ----------
-    // 单击：菜单已打开则收起；否则直接执行默认菜单功能
-    {
-        let menu_w = menu.as_weak();
+    // ---------- 菜单功能分发（index 从 0 开始） ----------
+    // 0 = 笔记窗口；其余 = 数字弹窗（占位功能）
+    let trigger: Rc<dyn Fn(i32)> = {
+        let note_w = note.as_weak();
         let popup_w = popup.as_weak();
         let ball_w = ball.as_weak();
+        Rc::new(move |index| {
+            let Some(ball) = ball_w.upgrade() else { return };
+            if index == 0 {
+                if let Some(note) = note_w.upgrade() {
+                    show_note(&note, &ball);
+                }
+            } else if let Some(popup) = popup_w.upgrade() {
+                show_popup(&popup, &ball, index + 1);
+            }
+        })
+    };
+
+    // ---------- 悬浮球事件 ----------
+    // 单击：菜单已打开则收起；否则执行默认菜单功能
+    {
+        let menu_w = menu.as_weak();
+        let trigger = trigger.clone();
         ball.on_clicked(move || {
-            let (Some(menu), Some(popup), Some(ball)) =
-                (menu_w.upgrade(), popup_w.upgrade(), ball_w.upgrade())
-            else {
-                return;
-            };
+            let Some(menu) = menu_w.upgrade() else { return };
             if menu.window().is_visible() {
                 hide_menu(&menu);
             } else {
-                show_popup(&popup, &ball, DEFAULT_MENU);
+                trigger(DEFAULT_MENU - 1);
             }
         });
     }
@@ -65,7 +94,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let _ = slint::quit_event_loop();
     });
 
-    // 拖动：按下时记录窗口位置，拖动中按增量移动窗口
+    // 拖动：按下时记录窗口位置，拖动中按增量移动窗口，拖动结束写入配置
     let drag_origin: Rc<Cell<(f32, f32)>> = Rc::new(Cell::new((0.0, 0.0)));
     {
         let ball_w = ball.as_weak();
@@ -94,21 +123,31 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         });
     }
+    {
+        let ball_w = ball.as_weak();
+        let cfg = cfg.clone();
+        ball.on_drag_ended(move || {
+            if let Some(b) = ball_w.upgrade() {
+                let sf = b.window().scale_factor();
+                let pos = b.window().position().to_logical(sf);
+                let mut c = cfg.borrow_mut();
+                c.ball_x = Some(pos.x);
+                c.ball_y = Some(pos.y);
+                config::save(&c);
+            }
+        });
+    }
 
     // ---------- 环形菜单事件 ----------
-    // 点击菜单项：收起菜单，并弹出对应编号的数字窗口
+    // 点击菜单项：收起菜单并执行对应功能
     {
         let menu_w = menu.as_weak();
-        let popup_w = popup.as_weak();
-        let ball_w = ball.as_weak();
+        let trigger = trigger.clone();
         menu.on_item_clicked(move |index| {
-            let (Some(menu), Some(popup), Some(ball)) =
-                (menu_w.upgrade(), popup_w.upgrade(), ball_w.upgrade())
-            else {
-                return;
-            };
-            hide_menu(&menu);
-            show_popup(&popup, &ball, index + 1);
+            if let Some(m) = menu_w.upgrade() {
+                hide_menu(&m);
+            }
+            trigger(index);
         });
     }
     // 点击菜单空白区域：收起菜单
@@ -131,7 +170,63 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // ---------- 笔记窗口事件 ----------
+    // 保存按钮
+    {
+        let note_w = note.as_weak();
+        let cfg = cfg.clone();
+        note.on_save_clicked(move || {
+            if let Some(note) = note_w.upgrade() {
+                save_note(&note, &cfg);
+            }
+        });
+    }
+    // 浏览目录按钮
+    {
+        let note_w = note.as_weak();
+        let cfg = cfg.clone();
+        note.on_browse_clicked(move || {
+            let Some(path) = rfd::FileDialog::new().pick_folder() else {
+                return;
+            };
+            let dir = path.to_string_lossy().to_string();
+            if let Some(note) = note_w.upgrade() {
+                note.set_save_dir(dir.clone().into());
+                note.set_status("".into());
+            }
+            cfg.borrow_mut().save_dir = Some(dir);
+            config::save(&cfg.borrow());
+        });
+    }
+    // 目录输入框回车：立即持久化
+    {
+        let cfg = cfg.clone();
+        note.on_dir_accepted(move |text| {
+            let dir = text.trim().to_string();
+            if !dir.is_empty() {
+                cfg.borrow_mut().save_dir = Some(dir);
+                config::save(&cfg.borrow());
+            }
+        });
+    }
+    // 关闭按钮
+    {
+        let note_w = note.as_weak();
+        note.on_close_clicked(move || {
+            if let Some(n) = note_w.upgrade() {
+                let _ = n.window().hide();
+            }
+        });
+    }
+
     ball.show()?;
+    // 恢复上次拖动到的位置
+    {
+        let c = cfg.borrow();
+        if let (Some(x), Some(y)) = (c.ball_x, c.ball_y) {
+            ball.window().set_position(LogicalPosition::new(x, y));
+        }
+    }
     slint::run_event_loop()
 }
 
@@ -165,15 +260,101 @@ fn hide_menu(menu: &RadialMenu) {
     });
 }
 
-/// 在悬浮球附近弹出数字窗口（220x150 与 number_popup.slint 中的尺寸一致）
+/// 在悬浮球旁边弹出数字窗口（不遮挡悬浮球）
 fn show_popup(popup: &NumberPopup, ball: &FloatingBall, number: i32) {
-    let sf = ball.window().scale_factor();
-    let ball_pos = ball.window().position().to_logical(sf);
-    let ball_size = ball.window().size().to_logical(sf);
-    popup.window().set_position(LogicalPosition::new(
-        ball_pos.x + ball_size.width / 2.0 - 110.0,
-        ball_pos.y + ball_size.height / 2.0 - 75.0,
-    ));
+    popup
+        .window()
+        .set_position(place_beside_ball(ball, POPUP_W, POPUP_H));
     popup.set_number(number);
     let _ = popup.window().show();
+}
+
+/// 在悬浮球旁边打开笔记窗口（不遮挡悬浮球）
+fn show_note(note: &NoteWindow, ball: &FloatingBall) {
+    note.window()
+        .set_position(place_beside_ball(ball, NOTE_W, NOTE_H));
+    note.set_status("".into());
+    let _ = note.window().show();
+}
+
+/// 保存笔记：校验目录 -> 生成时间文件名 -> 写入文件 -> 持久化配置
+fn save_note(note: &NoteWindow, cfg: &SharedConfig) {
+    let dir = note.get_save_dir().trim().to_string();
+    if dir.is_empty() {
+        note.set_status("⚠ 请先在上方设置保存目录".into());
+        note.set_status_ok(false);
+        return;
+    }
+    let dir_path = std::path::PathBuf::from(&dir);
+    if !dir_path.exists() {
+        if let Err(e) = std::fs::create_dir_all(&dir_path) {
+            note.set_status(format!("目录不存在且创建失败：{e}").into());
+            note.set_status_ok(false);
+            return;
+        }
+    }
+    let filename = format!("{}.md", chrono::Local::now().format("%Y%m%d_%H%M%S"));
+    match std::fs::write(dir_path.join(&filename), note.get_note_content().as_str()) {
+        Ok(_) => {
+            note.set_status(format!("✓ 已保存：{filename}").into());
+            note.set_status_ok(true);
+            note.set_note_content("".into());
+            cfg.borrow_mut().save_dir = Some(dir);
+            config::save(&cfg.borrow());
+        }
+        Err(e) => {
+            note.set_status(format!("保存失败：{e}").into());
+            note.set_status_ok(false);
+        }
+    }
+}
+
+/// 计算窗口位置：放在悬浮球左右两侧中空间较大的一侧，不遮挡悬浮球。
+/// win_w / win_h 为窗口逻辑尺寸，返回逻辑坐标。
+fn place_beside_ball(ball: &FloatingBall, win_w: f32, win_h: f32) -> LogicalPosition {
+    let sf = ball.window().scale_factor();
+    let ball_pos = ball.window().position(); // 物理坐标
+    let ball_size = ball.window().size(); // 物理尺寸
+    let bx = ball_pos.x as f32;
+    let by = ball_pos.y as f32;
+    let bw = ball_size.width as f32;
+    let bh = ball_size.height as f32;
+    let ball_cx = bx + bw / 2.0;
+    let ball_cy = by + bh / 2.0;
+
+    let (sx, sy, sw, sh) = screen_rect_around(ball_cx, ball_cy);
+    let win_wp = win_w * sf;
+    let win_hp = win_h * sf;
+    let gap = 12.0 * sf;
+
+    let right_space = sx + sw - (bx + bw);
+    let left_space = bx - sx;
+
+    let x = if right_space >= left_space {
+        // 放右边，放不下时贴屏幕右边缘
+        (bx + bw + gap).clamp(sx + gap, (sx + sw - win_wp - gap).max(sx + gap))
+    } else {
+        // 放左边，放不下时贴屏幕左边缘
+        (bx - gap - win_wp).max(sx + gap)
+    };
+    let y = (ball_cy - win_hp / 2.0).clamp(sy + gap, (sy + sh - win_hp - gap).max(sy + gap));
+
+    LogicalPosition::new(x / sf, y / sf)
+}
+
+/// 返回包含指定物理坐标的显示器范围；找不到时回退到主屏，再不行返回 1920x1080。
+fn screen_rect_around(px: f32, py: f32) -> (f32, f32, f32, f32) {
+    if let Ok(displays) = display_info::DisplayInfo::all() {
+        let containing = displays.iter().find(|d| {
+            px >= d.x as f32
+                && px < (d.x + d.width as i32) as f32
+                && py >= d.y as f32
+                && py < (d.y + d.height as i32) as f32
+        });
+        let primary = displays.iter().find(|d| d.is_primary).or(displays.first());
+        if let Some(d) = containing.or(primary) {
+            return (d.x as f32, d.y as f32, d.width as f32, d.height as f32);
+        }
+    }
+    (0.0, 0.0, 1920.0, 1080.0)
 }

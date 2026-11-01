@@ -19,6 +19,8 @@ export component FloatingBall inherits Window {
     callback drag-started();
     // 拖动增量（相对按下点，逻辑像素）
     callback drag-moved(delta-x: length, delta-y: length);
+    // 一次拖动结束（抬起左键且发生过移动）
+    callback drag-ended();
 
     no-frame: true;
     always-on-top: true;
@@ -78,6 +80,9 @@ export component FloatingBall inherits Window {
                     root.drag-started();
                 }
             } else if (event.kind == PointerEventKind.up) {
+                if (root.pressed && root.dragged) {
+                    root.drag-ended();
+                }
                 root.pressed = false;
             }
         }
