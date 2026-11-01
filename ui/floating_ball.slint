@@ -64,6 +64,8 @@ export component FloatingBall inherits Window {
             text: root.text;
             color: white;
             font-size: root.ball-size * 0.42;
+            // 符号字符（⚙ 等）在默认正文字体里缺字形，指定系统符号字体
+            font-family: "Segoe UI Symbol";
             horizontal-alignment: center;
             vertical-alignment: center;
         }

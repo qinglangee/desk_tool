@@ -106,6 +106,8 @@ export component NoteWindow inherits Window {
                     text: root.status;
                     color: root.status-ok ? #6cc26c : #e06c60;
                     font-size: 12px;
+                    // 状态文本含 ✓ ⚠ 等符号字符，指定系统符号字体避免豆腐块
+                    font-family: "Segoe UI Symbol";
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                     wrap: word-wrap;
