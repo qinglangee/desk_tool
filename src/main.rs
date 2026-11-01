@@ -286,7 +286,7 @@ fn show_note(note: &NoteWindow, ball: &FloatingBall) {
 fn save_note(note: &NoteWindow, cfg: &SharedConfig) {
     let dir = note.get_save_dir().trim().to_string();
     if dir.is_empty() {
-        note.set_status("⚠ 请先在上方设置保存目录".into());
+        note.set_status("请先在上方设置保存目录".into());
         note.set_status_ok(false);
         return;
     }
@@ -299,9 +299,12 @@ fn save_note(note: &NoteWindow, cfg: &SharedConfig) {
         }
     }
     let filename = format!("{}.md", chrono::Local::now().format("%Y%m%d_%H%M%S"));
-    match std::fs::write(dir_path.join(&filename), note.get_note_content().as_str()) {
+    // 写成带 BOM 的 UTF-8：无 BOM 时 TotalCmd F3 等老工具会按系统 ANSI(GBK) 解码导致中文乱码
+    let mut data = b"\xEF\xBB\xBF".to_vec();
+    data.extend_from_slice(note.get_note_content().as_bytes());
+    match std::fs::write(dir_path.join(&filename), &data) {
         Ok(_) => {
-            note.set_status(format!("✓ 已保存：{filename}").into());
+            note.set_status(format!("已保存：{filename}").into());
             note.set_status_ok(true);
             note.set_note_content("".into());
             cfg.borrow_mut().save_dir = Some(dir);
