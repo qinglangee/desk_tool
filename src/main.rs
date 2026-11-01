@@ -1,3 +1,7 @@
+// Windows 下编译为 GUI 子系统程序，运行时不附带命令行（控制台）窗口。
+// 调试期间如需在终端看 println! 输出，可临时注释掉这一行。
+#![windows_subsystem = "windows"]
+
 mod config;
 
 use std::cell::{Cell, RefCell};
