@@ -230,6 +230,8 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     ball.show()?;
+    // 把悬浮球窗口从任务栏移除，改为常驻系统托盘
+    hide_taskbar_icon_soon(ball.as_weak());
     // 恢复上次拖动到的位置
     {
         let c = cfg.borrow();
@@ -237,6 +239,12 @@ fn main() -> Result<(), slint::PlatformError> {
             ball.window().set_position(LogicalPosition::new(x, y));
         }
     }
+
+    // ---------- 系统托盘 ----------
+    // 托盘保持存活直到事件循环结束；创建失败时退化为无托盘运行
+    let tray = setup_tray();
+    let _tray_timer = tray.as_ref().map(|t| start_tray_events(ball.as_weak(), t));
+
     slint::run_event_loop()
 }
 
@@ -253,6 +261,7 @@ fn show_menu(menu: &RadialMenu, ball: &FloatingBall) {
     ));
     menu.set_expand(0.0);
     let _ = menu.window().show();
+    hide_taskbar_icon_soon(menu.as_weak());
     menu.set_expand(1.0);
 }
 
@@ -277,6 +286,7 @@ fn show_popup(popup: &NumberPopup, ball: &FloatingBall, number: i32) {
         .set_position(place_beside_ball(ball, POPUP_W, POPUP_H));
     popup.set_number(number);
     let _ = popup.window().show();
+    hide_taskbar_icon_soon(popup.as_weak());
 }
 
 /// 在悬浮球旁边打开笔记窗口（不遮挡悬浮球）
@@ -286,6 +296,168 @@ fn show_note(note: &NoteWindow, ball: &FloatingBall) {
     note.set_status("".into());
     note.set_status_icon("".into());
     let _ = note.window().show();
+    hide_taskbar_icon_soon(note.as_weak());
+}
+
+/// 重新显示悬浮球（例如通过托盘图标唤起）
+fn show_ball(ball: &FloatingBall) {
+    let _ = ball.window().show();
+    hide_taskbar_icon_soon(ball.as_weak());
+}
+
+/// 隐藏窗口在任务栏上的图标。
+/// Slint 的 winit 后端是懒创建原生窗口的，show() 之后句柄可能还不存在，
+/// 所以这里立即尝试一次，等事件循环跑起来后再补一次。
+fn hide_taskbar_icon_soon<T: slint::ComponentHandle + 'static>(weak: slint::Weak<T>) {
+    let Some(component) = weak.upgrade() else {
+        return;
+    };
+    hide_taskbar_icon(component.window());
+    Timer::single_shot(Duration::from_millis(300), move || {
+        if let Some(component) = weak.upgrade() {
+            hide_taskbar_icon(component.window());
+        }
+    });
+}
+
+#[cfg(windows)]
+fn hide_taskbar_icon(window: &slint::Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, COINIT_APARTMENTTHREADED, CLSCTX_ALL,
+    };
+    use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    };
+
+    // 原生窗口还没创建时拿不到句柄，交给调用方的延时重试兜底
+    let slint_handle = window.window_handle();
+    let Ok(handle) = slint_handle.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::Win32(win32) = handle.as_raw() else {
+        return;
+    };
+    let hwnd = HWND(win32.hwnd.get() as *mut core::ffi::c_void);
+
+    unsafe {
+        // TOOLWINDOW 扩展样式：任务栏按钮和 Alt+Tab 列表里都不再出现该窗口
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        let new_style = (ex_style | WS_EX_TOOLWINDOW.0 as i32) & !(WS_EX_APPWINDOW.0 as i32);
+        SetWindowLongW(hwnd, GWL_EXSTYLE, new_style);
+
+        // 已经生成的按钮需要 ITaskbarList 立即移除（与 winit 的 set_skip_taskbar 做法一致）
+        static COM_INIT: std::sync::Once = std::sync::Once::new();
+        COM_INIT.call_once(|| {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        });
+        if let Ok(list) = CoCreateInstance::<_, ITaskbarList>(
+            &TaskbarList,
+            None::<&windows::core::IUnknown>,
+            CLSCTX_ALL,
+        ) {
+            let _ = list.HrInit();
+            let _ = list.DeleteTab(hwnd);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn hide_taskbar_icon(_window: &slint::Window) {}
+
+struct TrayRuntime {
+    // 必须持有 TrayIcon，否则托盘图标会在离开作用域时消失
+    _icon: tray_icon::TrayIcon,
+    show_id: tray_icon::menu::MenuId,
+    quit_id: tray_icon::menu::MenuId,
+}
+
+/// 创建托盘图标与右键菜单（“显示悬浮球”“退出”）
+fn setup_tray() -> Option<TrayRuntime> {
+    use tray_icon::menu::{Menu, MenuItem};
+
+    let show_item = MenuItem::with_id("show", "显示悬浮球", true, None);
+    let quit_item = MenuItem::with_id("quit", "退出", true, None);
+
+    let menu = Menu::new();
+    menu.append(&show_item).ok()?;
+    menu.append(&quit_item).ok()?;
+
+    let icon = tray_icon::Icon::from_rgba(tray_icon_rgba(32), 32, 32).ok()?;
+    let tray = tray_icon::TrayIconBuilder::new()
+        .with_tooltip("desk_tool 悬浮球")
+        .with_icon(icon)
+        .with_menu(Box::new(menu))
+        .build()
+        .ok()?;
+
+    Some(TrayRuntime {
+        _icon: tray,
+        show_id: show_item.id().clone(),
+        quit_id: quit_item.id().clone(),
+    })
+}
+
+/// 托盘事件轮询：Windows 上托盘事件走原生消息循环，
+/// 用 Slint 的定时器在自己的事件循环里取出并分发。
+fn start_tray_events(ball: slint::Weak<FloatingBall>, tray: &TrayRuntime) -> Timer {
+    let show_id = tray.show_id.clone();
+    let quit_id = tray.quit_id.clone();
+
+    let timer = Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_millis(120),
+        move || {
+            while let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
+                if event.id == show_id {
+                    if let Some(ball) = ball.upgrade() {
+                        show_ball(&ball);
+                    }
+                } else if event.id == quit_id {
+                    let _ = slint::quit_event_loop();
+                }
+            }
+            // 左键单击托盘图标也可唤起悬浮球（右键菜单由 tray-icon 自行弹出）
+            while let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
+                if let tray_icon::TrayIconEvent::Click {
+                    button: tray_icon::MouseButton::Left,
+                    button_state: tray_icon::MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    if let Some(ball) = ball.upgrade() {
+                        show_ball(&ball);
+                    }
+                }
+            }
+        },
+    );
+    timer
+}
+
+/// 代码生成 32×32 的蓝色圆形托盘图标（RGBA，无需额外的图片资源）
+fn tray_icon_rgba(size: u32) -> Vec<u8> {
+    let mut data = Vec::with_capacity((size * size * 4) as usize);
+    let radius = size as f32 / 2.0;
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 + 0.5 - radius;
+            let dy = y as f32 + 0.5 - radius;
+            let dist = (dx * dx + dy * dy).sqrt();
+            // 边缘 1px 抗锯齿
+            let alpha = ((radius - dist).clamp(0.0, 1.0) * 255.0) as u8;
+            // 从上到下的蓝色渐变
+            let t = y as f32 / size as f32;
+            let red = (59.0 + t * 20.0) as u8;
+            let green = (130.0 - t * 40.0) as u8;
+            let blue = (246.0 - t * 30.0) as u8;
+            data.extend_from_slice(&[red, green, blue, alpha]);
+        }
+    }
+    data
 }
 
 /// 保存笔记：校验目录 -> 生成时间文件名 -> 写入文件 -> 持久化配置
