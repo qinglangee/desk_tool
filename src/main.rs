@@ -202,6 +202,7 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some(note) = note_w.upgrade() {
                 note.set_save_dir(dir.clone().into());
                 note.set_status("".into());
+                note.set_status_icon("".into());
             }
             cfg.borrow_mut().save_dir = Some(dir);
             config::save(&cfg.borrow());
@@ -283,6 +284,7 @@ fn show_note(note: &NoteWindow, ball: &FloatingBall) {
     note.window()
         .set_position(place_beside_ball(ball, NOTE_W, NOTE_H));
     note.set_status("".into());
+    note.set_status_icon("".into());
     let _ = note.window().show();
 }
 
@@ -290,13 +292,15 @@ fn show_note(note: &NoteWindow, ball: &FloatingBall) {
 fn save_note(note: &NoteWindow, cfg: &SharedConfig) {
     let dir = note.get_save_dir().trim().to_string();
     if dir.is_empty() {
-        note.set_status("⚠ 请先在上方设置保存目录".into());
+        note.set_status_icon("⚠".into());
+        note.set_status("请先在上方设置保存目录".into());
         note.set_status_ok(false);
         return;
     }
     let dir_path = std::path::PathBuf::from(&dir);
     if !dir_path.exists() {
         if let Err(e) = std::fs::create_dir_all(&dir_path) {
+            note.set_status_icon("".into());
             note.set_status(format!("目录不存在且创建失败：{e}").into());
             note.set_status_ok(false);
             return;
@@ -308,13 +312,15 @@ fn save_note(note: &NoteWindow, cfg: &SharedConfig) {
     data.extend_from_slice(note.get_note_content().as_bytes());
     match std::fs::write(dir_path.join(&filename), &data) {
         Ok(_) => {
-            note.set_status(format!("✓ 已保存：{filename}").into());
+            note.set_status_icon("✓".into());
+            note.set_status(format!("已保存：{filename}").into());
             note.set_status_ok(true);
             note.set_note_content("".into());
             cfg.borrow_mut().save_dir = Some(dir);
             config::save(&cfg.borrow());
         }
         Err(e) => {
+            note.set_status_icon("".into());
             note.set_status(format!("保存失败：{e}").into());
             note.set_status_ok(false);
         }

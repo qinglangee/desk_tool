@@ -7,6 +7,9 @@ export component NoteWindow inherits Window {
     in-out property <string> save-dir: "";
     in-out property <string> note-content: "";
     in-out property <string> status: "";
+    // 状态图标（✓ / ⚠）单独存放：这些符号只有系统符号字体有字形，
+    // 而中文与全角标点只有中文字体有字形，二者无法用同一个字体渲染
+    in-out property <string> status-icon: "";
     in-out property <bool> status-ok: true;   // true=绿色提示，false=红色警告
 
     callback save-clicked();
@@ -82,6 +85,8 @@ export component NoteWindow inherits Window {
                     horizontal-stretch: 1;
                     placeholder-text: "未设置（保存前请先填写）";
                     text <=> root.save-dir;
+                    // 默认字体不含中文全角标点（，。：（）等），会显示成方框
+                    font-family: "Microsoft YaHei";
                     accepted(text) => { root.dir-accepted(text); }
                 }
                 Button {
@@ -96,18 +101,27 @@ export component NoteWindow inherits Window {
                 text <=> root.note-content;
                 placeholder-text: "在这里输入笔记内容…";
                 font-size: 14px;
+                // 默认字体不含中文全角标点（，。：；？！（）《》等），会显示成方框
+                font-family: "Microsoft YaHei";
             }
 
             // 状态 + 保存按钮
             HorizontalLayout {
                 height: 36px;
                 spacing: 8px;
+                // 图标与文字分开渲染：✓ ⚠ 用系统符号字体，中文和全角标点用中文字体
+                if root.status-icon != "" : Text {
+                    text: root.status-icon;
+                    color: root.status-ok ? #6cc26c : #e06c60;
+                    font-size: 12px;
+                    font-family: "Segoe UI Symbol";
+                    vertical-alignment: center;
+                }
                 Text {
                     text: root.status;
                     color: root.status-ok ? #6cc26c : #e06c60;
                     font-size: 12px;
-                    // 状态文本含 ✓ ⚠ 等符号字符，指定系统符号字体避免豆腐块
-                    font-family: "Segoe UI Symbol";
+                    font-family: "Microsoft YaHei";
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                     wrap: word-wrap;
